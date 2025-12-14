@@ -1,3 +1,5 @@
+# app/cor/config.py
+
 from dotenv import load_dotenv
 import os
 
@@ -15,6 +17,7 @@ class Settings:
     POSTGRES_PASSWORD: str = os.getenv("POSTGRES_PASSWORD")
     POSTGRES_HOST: str = os.getenv("POSTGRES_HOST")
     POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", 5432))
+    DATABASE_URL: str = os.getenv("DATABASE_URL")
 
     AWS_REGION: str = os.getenv("AWS_REGION")
     AWS_S3_BUCKET: str = os.getenv("AWS_S3_BUCKET")
