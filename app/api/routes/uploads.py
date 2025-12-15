@@ -14,6 +14,9 @@ from app.api.schemas.upload import (
 from app.api.schemas.complete import UploadCompleteResponse
 from app.core.s3 import upload_chunk_to_s3
 
+from app.workers.assemble import assemble_upload
+
+
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 
 
@@ -112,6 +115,8 @@ def complete_upload(upload_id: UUID, db: Session = Depends(get_db)):
 
     session.status = "pending_assembly"
     db.commit()
+
+    assemble_upload.delay(str(upload_id))
 
     return UploadCompleteResponse(
         upload_id=session.upload_id,
