@@ -11,6 +11,7 @@ from app.api.schemas.upload import (
     UploadInitResponse,
     UploadStatusResponse,
 )
+from app.api.schemas.complete import UploadCompleteResponse
 from app.core.s3 import upload_chunk_to_s3
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -52,15 +53,19 @@ def upload_chunk(
     if not session:
         raise HTTPException(status_code=404, detail="Upload not found")
 
+    if session.status in ("pending_assembly", "completed"):
+        raise HTTPException(
+            status_code=400,
+            detail="Upload already finalized",
+        )
+
     if chunk_index < 0 or chunk_index >= session.total_chunks:
         raise HTTPException(status_code=400, detail="Invalid chunk index")
 
     s3_key = f"uploads/{upload_id}/chunks/{chunk_index}"
 
-    # Upload chunk to S3 (idempotent overwrite)
     upload_chunk_to_s3(file.file, s3_key)
 
-    # Update DB state
     if chunk_index not in session.uploaded_chunks:
         session.uploaded_chunks.append(chunk_index)
 
@@ -72,6 +77,46 @@ def upload_chunk(
         "chunk_index": chunk_index,
         "status": "uploaded",
     }
+
+
+@router.post("/{upload_id}/complete", response_model=UploadCompleteResponse)
+def complete_upload(upload_id: UUID, db: Session = Depends(get_db)):
+    session = (
+        db.query(UploadSession)
+        .filter(UploadSession.upload_id == upload_id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Upload not found")
+
+    # Idempotency: already completed or pending
+    if session.status in ("pending_assembly", "completed"):
+        return UploadCompleteResponse(
+            upload_id=session.upload_id,
+            status=session.status,
+        )
+
+    uploaded = sorted(session.uploaded_chunks)
+    expected = list(range(session.total_chunks))
+
+    if uploaded != expected:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Upload incomplete",
+                "uploaded_chunks": uploaded,
+                "expected_chunks": expected,
+            },
+        )
+
+    session.status = "pending_assembly"
+    db.commit()
+
+    return UploadCompleteResponse(
+        upload_id=session.upload_id,
+        status=session.status,
+    )
 
 
 @router.get("/{upload_id}/status", response_model=UploadStatusResponse)
