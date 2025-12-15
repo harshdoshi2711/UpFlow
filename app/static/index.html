@@ -1,10 +1,151 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>UpFlow</title>
+  <meta charset="UTF-8" />
+  <title>UpFlow Demo</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 700px;
+      margin: 40px auto;
+    }
+    button {
+      margin-top: 10px;
+      padding: 8px 12px;
+    }
+    pre {
+      background: #f4f4f4;
+      padding: 10px;
+      max-height: 300px;
+      overflow: auto;
+    }
+  </style>
 </head>
 <body>
-  <h1>UpFlow Upload Demo</h1>
-  <p>UI will be implemented in Phase 6.</p>
+
+  <h1>UpFlow – Resumable Upload Demo</h1>
+
+  <input type="file" id="fileInput" />
+  <br />
+  <button onclick="startUpload()">Start / Resume Upload</button>
+
+  <h3>Status</h3>
+  <pre id="status"></pre>
+
+<script>
+const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
+const API_BASE = "";
+
+function log(msg) {
+  document.getElementById("status").textContent += msg + "\n";
+}
+
+function getStoredSession() {
+  return JSON.parse(localStorage.getItem("upflow_session"));
+}
+
+function saveSession(data) {
+  localStorage.setItem("upflow_session", JSON.stringify(data));
+}
+
+async function startUpload() {
+  const file = document.getElementById("fileInput").files[0];
+  if (!file) {
+    alert("Select a file first");
+    return;
+  }
+
+  let session = getStoredSession();
+
+  if (!session || session.filename !== file.name) {
+    log("Initializing new upload session...");
+    const res = await fetch("/uploads/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name,
+        total_chunks: Math.ceil(file.size / CHUNK_SIZE),
+        chunk_size: CHUNK_SIZE
+      })
+    });
+    session = await res.json();
+    session.filename = file.name;
+    session.uploaded_chunks = [];
+    saveSession(session);
+  }
+
+  log(`Upload ID: ${session.upload_id}`);
+  await uploadChunks(file, session);
+}
+
+async function uploadChunks(file, session) {
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+  for (let i = 0; i < totalChunks; i++) {
+    if (session.uploaded_chunks.includes(i)) {
+      log(`Chunk ${i} already uploaded, skipping`);
+      continue;
+    }
+
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, file.size);
+    const chunk = file.slice(start, end);
+
+    log(`Uploading chunk ${i}...`);
+
+    const formData = new FormData();
+    formData.append("file", chunk);
+
+    const res = await fetch(
+      `/uploads/${session.upload_id}/chunks/${i}`,
+      { method: "PUT", body: formData }
+    );
+
+    if (!res.ok) {
+      log(`❌ Failed at chunk ${i}. You can retry.`);
+      return;
+    }
+
+    session.uploaded_chunks.push(i);
+    saveSession(session);
+    log(`✅ Chunk ${i} uploaded`);
+  }
+
+  log("All chunks uploaded. Completing...");
+  await completeUpload(session.upload_id);
+}
+
+async function completeUpload(uploadId) {
+  const res = await fetch(`/uploads/${uploadId}/complete`, {
+    method: "POST"
+  });
+
+  const data = await res.json();
+  log(`Final status: ${data.status}`);
+
+  if (data.status === "completed") {
+    log("🎉 Upload complete!");
+    localStorage.removeItem("upflow_session");
+  } else {
+    log("⏳ Assembly in progress...");
+    pollStatus(uploadId);
+  }
+}
+
+async function pollStatus(uploadId) {
+  const interval = setInterval(async () => {
+    const res = await fetch(`/uploads/${uploadId}/status`);
+    const data = await res.json();
+    log(`Status: ${data.status}`);
+
+    if (data.status === "completed") {
+      clearInterval(interval);
+      log("🎉 Upload fully assembled!");
+      localStorage.removeItem("upflow_session");
+    }
+  }, 3000);
+}
+</script>
+
 </body>
 </html>
